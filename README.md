@@ -1,2 +1,2 @@
-# com.alirezapkg.magicws
+# Magic-WS-Unity
 Unity client package for magic-ws.
