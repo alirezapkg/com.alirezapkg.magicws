@@ -1,0 +1,19 @@
+{
+  "name": "com.alirezapkg.magicws",
+  "version": "1.0.0",
+  "displayName": "MagicWS",
+  "description": "High-performance, lightweight binary WebSocket client for Unity, designed to work seamlessly with magic-ws Go server.",
+  "unity": "2022.3",
+  "author": {
+    "name": "ali reza",
+    "email": "lordiroh3@gmail.com",
+    "url": "https://github.com/alirezapkg/com.alirezapkg.magicws"
+  },
+  "samples": [
+    {
+      "displayName": "Integration Test & Example",
+      "description": "A complete integration sample showing how to connect to magic-ws Go server, join rooms, and handle binary events.",
+      "path": "Samples~/IntegrationTest"
+    }
+  ]
+}

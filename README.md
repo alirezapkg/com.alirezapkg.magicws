@@ -1,2 +1,2 @@
-# Magic-WS-Unity
+# MagicWS Unity
 Unity client package for magic-ws.
