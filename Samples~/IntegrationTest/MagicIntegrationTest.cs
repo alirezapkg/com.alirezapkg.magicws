@@ -23,7 +23,7 @@ namespace MagicWS.Testing
                 Debug.LogWarning("❌ Disconnected from MagicWS Server.");
             });
 
-            Debug.Log($"Connecting to MagicWS Server at {serverUrl}...");
+            Debug.Log($"Connecting to MagicWS server at {serverUrl}...");
             _client.Connect(serverUrl);
         }
 
@@ -49,7 +49,7 @@ namespace MagicWS.Testing
             string moveData = $"x:{Random.Range(0, 100)},y:{Random.Range(0, 100)}";
             byte[] payload = Encoding.UTF8.GetBytes(moveData);
 
-            Debug.Log($"[Unity -> Go] Sending Move: {moveData}");
+            Debug.Log($"[Unity -> Server] Sending Move: {moveData}");
             _events.Emit("player_move", payload);
         }
 
@@ -60,20 +60,20 @@ namespace MagicWS.Testing
             string chatData = $"Hello from Unity client at {Time.time:F1}s!";
             byte[] payload = Encoding.UTF8.GetBytes(chatData);
 
-            Debug.Log($"[Unity -> Go] Sending Chat: {chatData}");
+            Debug.Log($"[Unity -> Server] Sending Chat: {chatData}");
             _events.Emit("chat_message", payload);
         }
 
         private void OnChatMessageReceived(byte[] payload)
         {
             string message = Encoding.UTF8.GetString(payload);
-            Debug.Log($"<color=green>[Go -> Unity] Chat Received:</color> {message}");
+            Debug.Log($"<color=green>[Server -> Unity] Chat Received:</color> {message}");
         }
 
         private void OnPlayerMoveReceived(byte[] payload)
         {
             string moveInfo = Encoding.UTF8.GetString(payload);
-            Debug.Log($"<color=cyan>[Go -> Unity] Move Received:</color> {moveInfo}");
+            Debug.Log($"<color=cyan>[Server -> Unity] Move Received:</color> {moveInfo}");
         }
 
         private void OnDestroy()
