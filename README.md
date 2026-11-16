@@ -29,7 +29,7 @@ payload. No JSON, no base64, no per-message type tags.
 Add via Unity Package Manager (UPM):
 
 ```text
-https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.0
+https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.1
 ```
 
 Or add it to `Packages/manifest.json`:
@@ -37,7 +37,7 @@ Or add it to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.0"
+    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.1"
   }
 }
 ```
