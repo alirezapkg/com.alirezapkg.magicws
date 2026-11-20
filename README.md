@@ -15,6 +15,13 @@ payload. No JSON, no base64, no per-message type tags.
 
 - Binary protocol with FNV-1a event hashing
 - Main-thread safe dispatch — background receive loop, `Tick()` on the main thread
+- Automatic reconnect with exponential backoff (`ReconnectOptions`)
+- Connection state machine (`ConnectionState`) and lifecycle events (`OnConnected`, `OnReconnecting`, `OnReconnected`, `OnError`)
+- Thread-safe send queue — a single writer task drains the outbound queue, so `Send` can be called from any thread without blocking or throwing
+- Separate `IsConnected` and `IsClosed` to tell "socket open" from "user closed"
+- Custom close codes (`Close(code, reason)`) on native platforms
+- `Tick(int maxMessages)` to bound how many handlers run per frame
+- Real `LocalAddr` on native platforms (falls back to `""` when the runtime hides it)
 - Native platforms (Windows / macOS / Linux / Android / iOS) via `ClientWebSocket`
 - WebGL builds via a jslib bridge
 - Pooled receive buffers (`ArrayPool`) to avoid per-message allocation
@@ -29,7 +36,7 @@ payload. No JSON, no base64, no per-message type tags.
 Add via Unity Package Manager (UPM):
 
 ```text
-https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.1
+https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.1.0
 ```
 
 Or add it to `Packages/manifest.json`:
@@ -37,7 +44,7 @@ Or add it to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.0.1"
+    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.1.0"
   }
 }
 ```
@@ -88,7 +95,7 @@ public class Chat : MonoBehaviour
 
     public void SendChat(string text)
     {
-        if (_client.IsClosed) return;
+        if (!_client.IsConnected) return;
         _events.Emit("chat_message", Encoding.UTF8.GetBytes(text));
     }
 
@@ -127,18 +134,58 @@ Skipping `Tick()` means messages arrive but never fire.
 
 ```csharp
 _client.Connect("ws://127.0.0.1:8080/ws");
-_client.OnClose(() => { /* reconnect */ });
-_client.Close();
+_client.OnClose(() => { /* disconnected */ });
 
-bool closed = _client.IsClosed;
+bool connected = _client.IsConnected;  // socket is open
+bool closed = _client.IsClosed;        // Close() was called or connection ended
 string local = _client.LocalAddr();
 ```
 
 The client sends the one-byte protocol version (`0x01`) automatically as soon as
 the socket opens, so you never touch the handshake.
 
-`Connect` is `async void` under the hood and reports failures through `OnClose` —
-there is no separate error callback on `MagicClient` itself.
+#### Connection state
+
+```csharp
+_client.OnConnected += () => Debug.Log("connected");
+_client.OnError += msg => Debug.LogWarning($"error: {msg}");
+_client.OnReconnecting += () => Debug.Log("retrying...");
+_client.OnReconnected += () => Debug.Log("back");
+
+ConnectionState state = _client.State; // Disconnected / Connecting / Connected / Reconnecting
+```
+
+#### Automatic reconnect
+
+```csharp
+_client.Connect("ws://127.0.0.1:8080/ws", new ReconnectOptions
+{
+    MaxAttempts = 5,
+    InitialDelaySeconds = 0.5f,
+    MaxDelaySeconds = 10f,
+    BackoffMultiplier = 2f,
+    Forever = false,
+});
+```
+
+`OnReconnecting` fires before each retry, `OnReconnected` once after a
+successful reconnect. Set `Forever = true` to retry indefinitely.
+
+#### Custom close
+
+```csharp
+_client.Close(4001, "bye"); // native platforms send code 4001
+_client.Close();            // normal closure (1000)
+```
+
+Custom close codes are sent on native platforms; WebGL uses a normal closure.
+
+#### Bounded tick
+
+```csharp
+_client.Tick();       // drains up to 64 messages
+_client.Tick(10);     // drains at most 10 messages (useful to bound frame time)
+```
 
 ### Working with raw ids
 

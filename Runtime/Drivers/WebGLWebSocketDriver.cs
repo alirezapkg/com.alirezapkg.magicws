@@ -5,6 +5,9 @@ using AOT;
 
 namespace MagicWS.Drivers
 {
+    /// <summary>
+    /// WebGL jslib driver. Single connection per instance in this version.
+    /// </summary>
     public class WebGLWebSocketDriver : IWebSocketDriver
     {
         private static WebGLWebSocketDriver _activeInstance;
@@ -16,7 +19,7 @@ namespace MagicWS.Drivers
         public event Action<string> OnError;
 
         public bool IsConnected { get; private set; }
-        public string LocalAddr => "webgl-client";
+        public string LocalAddr { get { return "webgl-client"; } }
 
         private delegate void DelegateNoParam();
         private delegate void DelegateMessageParam(IntPtr bufferPtr, int length);
@@ -24,12 +27,11 @@ namespace MagicWS.Drivers
 #if UNITY_WEBGL && !UNITY_EDITOR
         [DllImport("__Internal")]
         private static extern void MagicWS_Connect(
-            string url, 
-            DelegateNoParam onOpen, 
-            DelegateMessageParam onMessage, 
-            DelegateNoParam onClose, 
-            DelegateNoParam onError
-        );
+            string url,
+            DelegateNoParam onOpen,
+            DelegateMessageParam onMessage,
+            DelegateNoParam onClose,
+            DelegateNoParam onError);
 
         [DllImport("__Internal")]
         private static extern void MagicWS_Send(byte[] ptr, int length);
@@ -47,14 +49,14 @@ namespace MagicWS.Drivers
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
             MagicWS_Connect(
-                url, 
-                JS_OnOpen, 
-                JS_OnMessage, 
-                JS_OnClose, 
-                JS_OnError
-            );
+                url,
+                JS_OnOpen,
+                JS_OnMessage,
+                JS_OnClose,
+                JS_OnError);
 #else
             OnError?.Invoke("WebGL driver is only supported in WebGL builds.");
+            OnClose?.Invoke();
 #endif
         }
 
@@ -68,21 +70,33 @@ namespace MagicWS.Drivers
 
         public void Tick()
         {
-            while (_receiveQueue.TryDequeue(out byte[] data))
+            Tick(64);
+        }
+
+        public void Tick(int maxMessages)
+        {
+            int n = 0;
+            while (n < maxMessages && _receiveQueue.TryDequeue(out byte[] data))
             {
                 OnMessage?.Invoke(data);
+                n++;
             }
         }
 
         public void Close()
         {
+            Close(1000, "");
+        }
+
+        public void Close(int code, string reason)
+        {
             IsConnected = false;
 #if UNITY_WEBGL && !UNITY_EDITOR
+            // Custom close codes are P1; P0 sends a normal closure.
             MagicWS_Close();
 #endif
             OnClose?.Invoke();
         }
-
 
         [MonoPInvokeCallback(typeof(DelegateNoParam))]
         private static void JS_OnOpen()

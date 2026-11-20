@@ -2,6 +2,12 @@ using System;
 
 namespace MagicWS.Drivers
 {
+    public class SendOptions
+    {
+        public int QueueSize = 256;
+        public bool DropOnFull = true;
+    }
+
     public interface IWebSocketDriver
     {
         event Action OnOpen;
@@ -15,6 +21,8 @@ namespace MagicWS.Drivers
         void Connect(string url);
         void Send(byte[] data);
         void Close();
+        void Close(int code, string reason);
         void Tick();
+        void Tick(int maxMessages);
     }
 }

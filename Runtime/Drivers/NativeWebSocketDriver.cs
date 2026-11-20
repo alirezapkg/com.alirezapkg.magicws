@@ -1,44 +1,109 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace MagicWS.Drivers
 {
+    /// <summary>
+    /// Native ClientWebSocket driver. A single writer task drains the send
+    /// queue, so Send is safe to call from any thread and message order is
+    /// preserved.
+    /// </summary>
     public class NativeWebSocketDriver : IWebSocketDriver
     {
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
+        private BlockingCollection<byte[]> _sendQueue;
+        private Task _writerTask;
         private readonly ConcurrentQueue<byte[]> _receiveQueue = new ConcurrentQueue<byte[]>();
+        private int _sendQueueSize = 256;
+        private bool _dropOnFull = true;
 
         public event Action OnOpen;
         public event Action<byte[]> OnMessage;
         public event Action OnClose;
         public event Action<string> OnError;
 
-        public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
-        public string LocalAddr => "127.0.0.1";
+        public bool IsConnected
+        {
+            get { return _ws != null && _ws.State == WebSocketState.Open; }
+        }
 
-        public async void Connect(string url)
+        /// <summary>
+        /// Local endpoint of the underlying socket. Some runtimes do not expose
+        /// it, in which case an empty string is returned.
+        /// </summary>
+        public string LocalAddr
+        {
+            get
+            {
+                if (_ws == null) return "";
+                try
+                {
+                    const BindingFlags flags =
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+                    Type type = _ws.GetType();
+                    PropertyInfo prop = type.GetProperty("LocalEndPoint", flags) ??
+                                        type.GetProperty("ListenerEndPoint", flags);
+                    EndPoint value = prop != null ? prop.GetValue(_ws) as EndPoint : null;
+                    return value != null ? value.ToString() : "";
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+        }
+
+        public void Connect(string url)
         {
             if (IsConnected) return;
 
             _ws = new ClientWebSocket();
             _cts = new CancellationTokenSource();
+            _sendQueue = new BlockingCollection<byte[]>(
+                new ConcurrentQueue<byte[]>(), _sendQueueSize);
+            _writerTask = Task.Run(() => WriterLoop(_sendQueue, _cts.Token));
 
+            ConnectAsync(url);
+        }
+
+        private async void ConnectAsync(string url)
+        {
             try
             {
-                await _ws.ConnectAsync(new Uri(url), _cts.Token);
+                await _ws.ConnectAsync(new Uri(url), _cts.Token).ConfigureAwait(false);
                 OnOpen?.Invoke();
-
                 _ = ReceiveLoop();
             }
             catch (Exception ex)
             {
                 OnError?.Invoke(ex.Message);
                 OnClose?.Invoke();
+            }
+        }
+
+        private async Task WriterLoop(BlockingCollection<byte[]> queue, CancellationToken token)
+        {
+            try
+            {
+                foreach (byte[] data in queue.GetConsumingEnumerable(token))
+                {
+                    await _ws.SendAsync(
+                        new ArraySegment<byte>(data),
+                        WebSocketMessageType.Binary,
+                        true,
+                        token).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // The receive loop reports closure.
             }
         }
 
@@ -53,13 +118,17 @@ namespace MagicWS.Drivers
 
                     while (true)
                     {
-                        var segment = new ArraySegment<byte>(receiveBuffer, totalBytes, receiveBuffer.Length - totalBytes);
-                        var result = await _ws.ReceiveAsync(segment, _cts.Token);
+                        ArraySegment<byte> segment = new ArraySegment<byte>(
+                            receiveBuffer, totalBytes, receiveBuffer.Length - totalBytes);
+                        WebSocketReceiveResult result =
+                            await _ws.ReceiveAsync(segment, _cts.Token).ConfigureAwait(false);
 
                         if (result.MessageType == WebSocketMessageType.Close)
                         {
                             ArrayPool<byte>.Shared.Return(receiveBuffer);
-                            await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Close", _cts.Token);
+                            await _ws.CloseAsync(
+                                WebSocketCloseStatus.NormalClosure, "Close", _cts.Token)
+                                .ConfigureAwait(false);
                             return;
                         }
 
@@ -88,7 +157,7 @@ namespace MagicWS.Drivers
             }
             catch
             {
-                // Silence stream termination exceptions on close
+                // Silence stream termination exceptions on close.
             }
             finally
             {
@@ -96,44 +165,81 @@ namespace MagicWS.Drivers
             }
         }
 
-        public async void Send(byte[] data)
+        public void Send(byte[] data)
         {
-            if (!IsConnected) return;
+            if (!IsConnected || _sendQueue == null) return;
 
-            try
+            if (!_sendQueue.TryAdd(data))
             {
-                await _ws.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Binary, true, _cts.Token);
+                if (_dropOnFull)
+                {
+                    return;
+                }
+                _sendQueue.Add(data);
             }
-            catch (Exception ex)
+        }
+
+        public void Send(byte[] data, SendOptions options)
+        {
+            if (options != null)
             {
-                OnError?.Invoke(ex.Message);
+                _sendQueueSize = options.QueueSize;
+                _dropOnFull = options.DropOnFull;
             }
+            Send(data);
         }
 
         public void Tick()
         {
-            while (_receiveQueue.TryDequeue(out byte[] data))
+            Tick(64);
+        }
+
+        public void Tick(int maxMessages)
+        {
+            int n = 0;
+            while (n < maxMessages && _receiveQueue.TryDequeue(out byte[] data))
             {
                 OnMessage?.Invoke(data);
+                n++;
             }
         }
 
-        public async void Close()
+        public void Close()
         {
-            _cts?.Cancel();
+            Close(1000, "");
+        }
+
+        public void Close(int code, string reason)
+        {
+            if (_cts != null)
+            {
+                _cts.Cancel();
+            }
+
             if (_ws != null && _ws.State == WebSocketState.Open)
             {
                 try
                 {
-                    await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client closed", CancellationToken.None);
+                    _ws.CloseAsync(
+                        (WebSocketCloseStatus)code, reason, CancellationToken.None)
+                        .ConfigureAwait(false);
                 }
                 catch
                 {
-                    // Ignore disconnect races
+                    // Ignore disconnect races.
                 }
             }
-            _ws?.Dispose();
-            _ws = null;
+
+            if (_sendQueue != null)
+            {
+                _sendQueue.CompleteAdding();
+            }
+
+            if (_ws != null)
+            {
+                _ws.Dispose();
+                _ws = null;
+            }
         }
     }
 }

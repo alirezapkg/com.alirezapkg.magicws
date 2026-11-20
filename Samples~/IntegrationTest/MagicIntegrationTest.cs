@@ -44,7 +44,7 @@ namespace MagicWS.Testing
 
         public void SendMoveTest()
         {
-            if (_client.IsClosed) return;
+            if (!_client.IsConnected) return;
 
             string moveData = $"x:{Random.Range(0, 100)},y:{Random.Range(0, 100)}";
             byte[] payload = Encoding.UTF8.GetBytes(moveData);
@@ -55,7 +55,7 @@ namespace MagicWS.Testing
 
         public void SendChatTest()
         {
-            if (_client.IsClosed) return;
+            if (!_client.IsConnected) return;
 
             string chatData = $"Hello from Unity client at {Time.time:F1}s!";
             byte[] payload = Encoding.UTF8.GetBytes(chatData);
