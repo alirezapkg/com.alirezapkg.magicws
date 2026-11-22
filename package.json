@@ -1,6 +1,6 @@
 {
   "name": "com.alirezapkg.magicws",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "displayName": "MagicWS",
   "description": "High-performance, lightweight binary WebSocket client for Unity, speaking the MagicWS protocol against any MagicWS server (Rust or Go).",
   "unity": "2022.3",

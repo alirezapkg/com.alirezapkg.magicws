@@ -236,7 +236,8 @@ namespace MagicWS
                         {
                             _isClosed = false;
                             _reconnectScheduled = false;
-                            _state = ConnectionState.Connecting;
+                            // Keep _state as Reconnecting so HandleOpen can
+                            // detect the reconnect and fire OnReconnected.
                         }
                     }
                     if (shouldConnect)

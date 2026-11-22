@@ -21,6 +21,11 @@ namespace MagicWS.Testing
 
         private void Start()
         {
+            StartCoroutine(RunAllTests());
+        }
+
+        private System.Collections.IEnumerator RunAllTests()
+        {
             RunStateTransitions();
             RunOnErrorOnce();
             RunLocalAddr();
@@ -29,7 +34,9 @@ namespace MagicWS.Testing
             RunReconnectOptionsDefaults();
             RunTickBudget();
             RunConcurrentSend();
-            RunReconnectAfterRemoteClose();
+            yield return StartCoroutine(RunReconnectAfterRemoteClose());
+            RunSpanEvents();
+            RunSpanEmit();
 
             Debug.Log(
                 $"[MagicWS Tests] Passed: {_passed}, Failed: {_failed}");
@@ -189,7 +196,7 @@ namespace MagicWS.Testing
             Check("concurrent send does not throw", error == null);
         }
 
-        private void RunReconnectAfterRemoteClose()
+        private System.Collections.IEnumerator RunReconnectAfterRemoteClose()
         {
             FakeWebSocketDriver fake = new FakeWebSocketDriver();
             MagicClient client = new MagicClient(fake);
@@ -208,14 +215,57 @@ namespace MagicWS.Testing
             // Server drops us; the client should schedule a reconnect.
             fake.SimulateRemoteClose();
 
-            for (int i = 0; i < 100 && reconnecting == 0; i++)
+            // Wait up to 2 seconds for reconnect to complete, yielding to main thread.
+            float deadline = Time.realtimeSinceStartup + 2f;
+            while (reconnecting < 101 && Time.realtimeSinceStartup < deadline)
             {
-                Thread.Sleep(10);
+                yield return null;
             }
 
             Check("on reconnecting fired", reconnecting > 0);
             // 1 reconnecting + 100 on reconnected = 101
             Check("on reconnected fired", reconnecting >= 101);
+        }
+
+        private void RunSpanEvents()
+        {
+            FakeWebSocketDriver fake = new FakeWebSocketDriver();
+            MagicClient client = new MagicClient(fake);
+            client.Connect("ws://x/ws");
+
+            bool spanCalled = false;
+            int spanLength = 0;
+            ClientEvents events = new ClientEvents(client);
+            events.OnSpan("span_event", payload =>
+            {
+                spanCalled = true;
+                spanLength = payload.Length;
+            });
+
+            // Build a MagicWS frame: 4-byte header (event id) + payload.
+            uint hash = FNV1a.Hash("span_event");
+            byte[] frame = new byte[4 + 5];
+            FNV1a.WriteHeader(frame, hash, 0);
+            frame[4] = 72; frame[5] = 101; frame[6] = 108; frame[7] = 108; frame[8] = 111;
+            fake.Push(frame);
+
+            client.Tick();
+            Check("span handler called", spanCalled);
+            Check("span payload length", spanLength == 5);
+        }
+
+        private void RunSpanEmit()
+        {
+            FakeWebSocketDriver fake = new FakeWebSocketDriver();
+            MagicClient client = new MagicClient(fake);
+            client.Connect("ws://x/ws");
+
+            ClientEvents events = new ClientEvents(client);
+
+            // Span-based emit should not throw.
+            byte[] payload = new byte[] { 1, 2, 3, 4 };
+            events.Emit("span_test", payload.AsSpan());
+            Check("span emit does not throw", true);
         }
     }
 

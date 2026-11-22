@@ -19,12 +19,13 @@ payload. No JSON, no base64, no per-message type tags.
 - Connection state machine (`ConnectionState`) and lifecycle events (`OnConnected`, `OnReconnecting`, `OnReconnected`, `OnError`)
 - Thread-safe send queue — a single writer task drains the outbound queue, so `Send` can be called from any thread without blocking or throwing
 - Separate `IsConnected` and `IsClosed` to tell "socket open" from "user closed"
-- Custom close codes (`Close(code, reason)`) on native platforms
+- Custom close codes (`Close(code, reason)`) on native and WebGL platforms
 - `Tick(int maxMessages)` to bound how many handlers run per frame
 - Real `LocalAddr` on native platforms (falls back to `""` when the runtime hides it)
 - Native platforms (Windows / macOS / Linux / Android / iOS) via `ClientWebSocket`
-- WebGL builds via a jslib bridge
+- WebGL builds via a jslib bridge with multi-connection support
 - Pooled receive buffers (`ArrayPool`) to avoid per-message allocation
+- Span-based event delivery (`OnSpan`) for zero-allocation hot paths
 
 ## Requirements
 
@@ -36,7 +37,7 @@ payload. No JSON, no base64, no per-message type tags.
 Add via Unity Package Manager (UPM):
 
 ```text
-https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.1.0
+https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.2.0
 ```
 
 Or add it to `Packages/manifest.json`:
@@ -44,7 +45,7 @@ Or add it to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.1.0"
+    "com.alirezapkg.magicws": "https://github.com/alirezapkg/com.alirezapkg.magicws.git#v1.2.0"
   }
 }
 ```
@@ -120,6 +121,24 @@ _events.Emit("player_move", payload);
 Registering the same name twice replaces the previous handler. Incoming messages
 shorter than the 4-byte header are ignored.
 
+#### Span-based events (zero-allocation)
+
+For hot paths where GC pressure matters, use `OnSpan` — the payload is passed
+as a `ReadOnlySpan<byte>` that references the driver's buffer directly:
+
+```csharp
+_events.OnSpan("player_move", payload =>
+{
+    // payload is valid only for the duration of this call.
+    // Do not store or escape the span.
+    ProcessMove(payload);
+});
+
+_events.Emit("player_move", someSpan);  // also works with ReadOnlySpan<byte>
+```
+
+Existing `On(string, Action<byte[]>)` handlers keep working unchanged.
+
 ### `Tick()` matters
 
 The native driver runs its receive loop on a background thread and queues frames
@@ -178,7 +197,8 @@ _client.Close(4001, "bye"); // native platforms send code 4001
 _client.Close();            // normal closure (1000)
 ```
 
-Custom close codes are sent on native platforms; WebGL uses a normal closure.
+Custom close codes are sent on both native platforms and WebGL (via a jslib
+`MagicWS_CloseWithCode` function added in v1.2.0).
 
 #### Bounded tick
 
@@ -201,10 +221,11 @@ unless you are implementing the framing yourself.
 
 ### WebGL
 
-WebGL builds use the jslib driver automatically. Note that the WebGL driver
-throws `"WebGL driver is only supported in WebGL builds."` if constructed in the
-editor, so test in a real WebGL build rather than the editor. Your server must
-also allow the browser origin (CORS headers).
+WebGL builds use the jslib driver automatically. Each `MagicClient` instance
+gets a unique connection id, so multiple clients can coexist in the same build.
+Note that the WebGL driver throws `"WebGL driver is only supported in WebGL
+builds."` if constructed in the editor, so test in a real WebGL build rather than
+the editor. Your server must also allow the browser origin (CORS headers).
 
 ## Protocol
 

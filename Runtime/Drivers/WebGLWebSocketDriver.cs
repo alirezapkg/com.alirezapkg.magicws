@@ -1,16 +1,21 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using AOT;
 
 namespace MagicWS.Drivers
 {
     /// <summary>
-    /// WebGL jslib driver. Single connection per instance in this version.
+    /// WebGL jslib driver. Each instance owns a unique connection id so
+    /// multiple <see cref="MagicClient"/> instances can coexist.
     /// </summary>
     public class WebGLWebSocketDriver : IWebSocketDriver
     {
-        private static WebGLWebSocketDriver _activeInstance;
+        private static readonly Dictionary<int, WebGLWebSocketDriver> _instances =
+            new Dictionary<int, WebGLWebSocketDriver>();
+
+        private int _connectionId;
         private readonly ConcurrentQueue<byte[]> _receiveQueue = new ConcurrentQueue<byte[]>();
 
         public event Action OnOpen;
@@ -19,14 +24,14 @@ namespace MagicWS.Drivers
         public event Action<string> OnError;
 
         public bool IsConnected { get; private set; }
-        public string LocalAddr { get { return "webgl-client"; } }
+        public string LocalAddr { get { return "webgl-client:" + _connectionId; } }
 
-        private delegate void DelegateNoParam();
-        private delegate void DelegateMessageParam(IntPtr bufferPtr, int length);
+        private delegate void DelegateNoParam(int connectionId);
+        private delegate void DelegateMessageParam(int connectionId, IntPtr bufferPtr, int length);
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         [DllImport("__Internal")]
-        private static extern void MagicWS_Connect(
+        private static extern int MagicWS_Connect(
             string url,
             DelegateNoParam onOpen,
             DelegateMessageParam onMessage,
@@ -34,26 +39,33 @@ namespace MagicWS.Drivers
             DelegateNoParam onError);
 
         [DllImport("__Internal")]
-        private static extern void MagicWS_Send(byte[] ptr, int length);
+        private static extern void MagicWS_Send(int id, byte[] ptr, int length);
 
         [DllImport("__Internal")]
-        private static extern void MagicWS_Close();
+        private static extern void MagicWS_Close(int id);
+
+        [DllImport("__Internal")]
+        private static extern void MagicWS_CloseWithCode(int id, int code, string reason);
 #endif
 
         public WebGLWebSocketDriver()
         {
-            _activeInstance = this;
         }
 
         public void Connect(string url)
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
-            MagicWS_Connect(
+            int id = MagicWS_Connect(
                 url,
                 JS_OnOpen,
                 JS_OnMessage,
                 JS_OnClose,
                 JS_OnError);
+            _connectionId = id;
+            lock (_instances)
+            {
+                _instances[_connectionId] = this;
+            }
 #else
             OnError?.Invoke("WebGL driver is only supported in WebGL builds.");
             OnClose?.Invoke();
@@ -64,7 +76,7 @@ namespace MagicWS.Drivers
         {
             if (!IsConnected) return;
 #if UNITY_WEBGL && !UNITY_EDITOR
-            MagicWS_Send(data, data.Length);
+            MagicWS_Send(_connectionId, data, data.Length);
 #endif
         }
 
@@ -92,43 +104,62 @@ namespace MagicWS.Drivers
         {
             IsConnected = false;
 #if UNITY_WEBGL && !UNITY_EDITOR
-            // Custom close codes are P1; P0 sends a normal closure.
-            MagicWS_Close();
+            if (code == 1000 && string.IsNullOrEmpty(reason))
+            {
+                MagicWS_Close(_connectionId);
+            }
+            else
+            {
+                MagicWS_CloseWithCode(_connectionId, code, reason ?? "");
+            }
 #endif
             OnClose?.Invoke();
         }
 
         [MonoPInvokeCallback(typeof(DelegateNoParam))]
-        private static void JS_OnOpen()
+        private static void JS_OnOpen(int connectionId)
         {
-            if (_activeInstance == null) return;
-            _activeInstance.IsConnected = true;
-            _activeInstance.OnOpen?.Invoke();
+            WebGLWebSocketDriver instance = FindInstance(connectionId);
+            if (instance == null) return;
+            instance.IsConnected = true;
+            instance.OnOpen?.Invoke();
         }
 
         [MonoPInvokeCallback(typeof(DelegateMessageParam))]
-        private static void JS_OnMessage(IntPtr bufferPtr, int length)
+        private static void JS_OnMessage(int connectionId, IntPtr bufferPtr, int length)
         {
-            if (_activeInstance == null || length <= 0) return;
+            WebGLWebSocketDriver instance = FindInstance(connectionId);
+            if (instance == null || length <= 0) return;
 
             byte[] data = new byte[length];
             Marshal.Copy(bufferPtr, data, 0, length);
-            _activeInstance._receiveQueue.Enqueue(data);
+            instance._receiveQueue.Enqueue(data);
         }
 
         [MonoPInvokeCallback(typeof(DelegateNoParam))]
-        private static void JS_OnClose()
+        private static void JS_OnClose(int connectionId)
         {
-            if (_activeInstance == null) return;
-            _activeInstance.IsConnected = false;
-            _activeInstance.OnClose?.Invoke();
+            WebGLWebSocketDriver instance = FindInstance(connectionId);
+            if (instance == null) return;
+            instance.IsConnected = false;
+            instance.OnClose?.Invoke();
         }
 
         [MonoPInvokeCallback(typeof(DelegateNoParam))]
-        private static void JS_OnError()
+        private static void JS_OnError(int connectionId)
         {
-            if (_activeInstance == null) return;
-            _activeInstance.OnError?.Invoke("WebSocket Error in WebGL");
+            WebGLWebSocketDriver instance = FindInstance(connectionId);
+            if (instance == null) return;
+            instance.OnError?.Invoke("WebSocket Error in WebGL");
+        }
+
+        private static WebGLWebSocketDriver FindInstance(int connectionId)
+        {
+            lock (_instances)
+            {
+                _instances.TryGetValue(connectionId, out var instance);
+                return instance;
+            }
         }
     }
 }
